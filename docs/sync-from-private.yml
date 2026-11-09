@@ -1,0 +1,71 @@
+# 이 파일은 참고용 사본입니다.
+# 실제로는 비공개 저장소 hyun1077/THINKING-LAB 의
+#   .github/workflows/sync-public.yml
+# 로 들어가야 동작합니다.
+#
+# 필요한 것: THINKING-LAB에 PUBLIC_SITE_TOKEN 시크릿 (public repo 쓰기 권한 PAT)
+
+name: Sync public site
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "index.html"
+      - "macro-terminal.html"
+      - "data/chart-registry.json"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 비공개 저장소 체크아웃
+        uses: actions/checkout@v5
+
+      - name: 공개 저장소 체크아웃
+        uses: actions/checkout@v5
+        with:
+          repository: hyun1077/thinking-lab-public
+          token: ${{ secrets.PUBLIC_SITE_TOKEN }}
+          path: public-repo
+
+      - name: 공개 대상 파일만 복사
+        run: |
+          set -euo pipefail
+          # 화이트리스트. 여기 적힌 것 외에는 절대 복사하지 않는다.
+          mkdir -p public-repo/data
+          cp index.html            public-repo/index.html
+          cp macro-terminal.html   public-repo/macro-terminal.html
+          cp data/chart-registry.json public-repo/data/chart-registry.json
+
+      - name: 비밀값 유출 차단 검사
+        run: |
+          set -euo pipefail
+          if grep -rIlnE 'AIza[0-9A-Za-z_-]{30,}|ghp_[A-Za-z0-9]{30,}|github_pat_|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY|xox[baprs]-|AKIA[0-9A-Z]{16}' \
+               public-repo/index.html public-repo/macro-terminal.html public-repo/data/chart-registry.json; then
+            echo "::error::비밀값 패턴이 발견되어 공개 동기화를 중단합니다."
+            exit 1
+          fi
+          # 비공개 전용 디렉터리가 섞여 들어갔는지 확인
+          for d in scripts base-model thinking-lab-app daily content tests; do
+            if [ -e "public-repo/$d" ]; then
+              echo "::error::비공개 디렉터리 $d 가 공개 저장소에 존재합니다. 중단합니다."
+              exit 1
+            fi
+          done
+          echo "검사 통과"
+
+      - name: 변경이 있으면 커밋·푸시
+        working-directory: public-repo
+        run: |
+          set -euo pipefail
+          git config user.name  "thinking-lab-sync"
+          git config user.email "noreply@github.com"
+          if git diff --quiet; then
+            echo "변경 없음"
+            exit 0
+          fi
+          git add index.html macro-terminal.html data/chart-registry.json
+          git commit -m "sync: 비공개 저장소 ${GITHUB_SHA::7} 반영"
+          git push
